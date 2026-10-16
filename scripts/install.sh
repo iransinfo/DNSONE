@@ -132,7 +132,8 @@ RAW_BASE="https://raw.githubusercontent.com/iransinfo/DNSONE/${HYPERDNS_REF}"
 RELEASE_BASE="https://github.com/iransinfo/DNSONE/releases/download/${HYPERDNS_REF}"
 
 DL_BIN="$(mktemp /tmp/hyperdns-bin.XXXXXX)"
-if curl -fL --retry 3 --connect-timeout 10 "${RELEASE_BASE}/hyperdns-linux-${BIN_ARCH}" -o "${DL_BIN}" 2>/dev/null && [ -s "${DL_BIN}" ]; then
+if curl -fL --retry 3 --connect-timeout 10 "${RELEASE_BASE}/hyperdns" -o "${DL_BIN}" 2>/dev/null || \
+   curl -fL --retry 3 --connect-timeout 10 "${RELEASE_BASE}/hyperdns-linux-${BIN_ARCH}" -o "${DL_BIN}" 2>/dev/null; then
     chmod +x "${DL_BIN}"
     SRC_BIN="${DL_BIN}"
     echo -e "  ${GREEN}✓ Downloaded release binary (${BIN_ARCH}): $(( $(stat -c%s "${DL_BIN}" 2>/dev/null || echo 0) / 1024 / 1024 )) MB${NC}"
