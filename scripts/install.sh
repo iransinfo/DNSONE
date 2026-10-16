@@ -313,6 +313,22 @@ if [ -e /dev/tty ]; then
     fi
 fi
 
+if [ -n "${SETUP_DOMAIN}" ] && [ -n "${SETUP_EMAIL}" ]; then
+    echo -e "  ${CYAN}Applying domain and email via hyperdns...${NC}"
+
+    # Stop daemon before offline-updating DB or certs if running
+    systemctl stop hyperdns >/dev/null 2>&1 || true
+
+    # Issue SSL & update internal settings via binary CLI
+    if "${INSTALL_DIR}/hyperdns" -issue-ssl -domain "${SETUP_DOMAIN}" -email "${SETUP_EMAIL}"; then
+        echo -e "  ${GREEN}✓ SSL certificate obtained and panel domain configured successfully!${NC}"
+    elif [ -x "${INSTALL_DIR}/scripts/ssl_issue.sh" ]; then
+        echo -e "  ${YELLOW}Falling back to ssl_issue.sh...${NC}"
+        "${INSTALL_DIR}/scripts/ssl_issue.sh" "${SETUP_DOMAIN}" "${SETUP_EMAIL}" || true
+    fi
+fi
+
+
 # ==============================================================================
 # STEP 6: START & VERIFY SERVICE
 # ==============================================================================
