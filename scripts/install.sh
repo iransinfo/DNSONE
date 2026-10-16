@@ -127,9 +127,9 @@ case "${ARCH}" in
 esac
 echo -e "  ${GREEN}✓ Architecture detected: ${ARCH} (${BIN_ARCH})${NC}"
 
-HYPERDNS_REF="${HYPERDNS_REF:-main}"
+HYPERDNS_REF="${HYPERDNS_REF:-dnsone}"
 RAW_BASE="https://raw.githubusercontent.com/iransinfo/DNSONE/${HYPERDNS_REF}"
-RELEASE_BASE="https://github.com/iransinfo/DNSONE/releases/download/dnsone/${HYPERDNS_REF}"
+RELEASE_BASE="https://github.com/iransinfo/DNSONE/releases/download/${HYPERDNS_REF}"
 
 DL_BIN="$(mktemp /tmp/hyperdns-bin.XXXXXX)"
 if curl -fL --retry 3 --connect-timeout 10 "${RELEASE_BASE}/hyperdns-linux-${BIN_ARCH}" -o "${DL_BIN}" 2>/dev/null && [ -s "${DL_BIN}" ]; then
