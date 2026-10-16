@@ -295,13 +295,13 @@ echo -e "${CYAN}${BOLD}[5/6] Domain & SSL Certificate Setup...${NC}"
 SETUP_DOMAIN=""
 SETUP_EMAIL=""
 
-# Check if terminal is interactive
-if [ -t 0 ]; then
-    read -rp "👉 Enter your Domain (e.g. dns.example.com) [Press Enter to skip]: " USER_DOMAIN
+# Force interactive prompt using /dev/tty
+if [ -e /dev/tty ]; then
+    read -rp "👉 Enter your Domain (e.g. dns.example.com) [Press Enter to skip]: " USER_DOMAIN </dev/tty || true
     if [ -n "${USER_DOMAIN}" ]; then
         if validate_domain "${USER_DOMAIN}"; then
             SETUP_DOMAIN="${USER_DOMAIN}"
-            read -rp "👉 Enter your Email for Let's Encrypt SSL: " USER_EMAIL
+            read -rp "👉 Enter your Email for Let's Encrypt SSL: " USER_EMAIL </dev/tty || true
             if validate_email "${USER_EMAIL}"; then
                 SETUP_EMAIL="${USER_EMAIL}"
             else
@@ -309,30 +309,6 @@ if [ -t 0 ]; then
             fi
         else
             echo -e "  ${YELLOW}⚠ Invalid domain format. Skipping SSL setup.${NC}"
-        fi
-    fi
-fi
-
-SSL_ISSUED=false
-if [ -n "${SETUP_DOMAIN}" ] && [ -n "${SETUP_EMAIL}" ]; then
-    echo -e "  ${CYAN}Applying domain and email to /opt/hyperdns/config.json...${NC}"
-    sed -i "s|\"domain\": \"[^\"]*\"|\"domain\": \"${SETUP_DOMAIN}\"|" "${INSTALL_DIR}/config.json"
-    sed -i "s|\"email\": \"[^\"]*\"|\"email\": \"${SETUP_EMAIL}\"|" "${INSTALL_DIR}/config.json"
-    sed -i "s|\"acme_email\": \"[^\"]*\"|\"acme_email\": \"${SETUP_EMAIL}\"|" "${INSTALL_DIR}/config.json"
-    sed -i "s|\"ssl_enabled\": false|\"ssl_enabled\": true|" "${INSTALL_DIR}/config.json"
-
-    # Issue SSL
-    if [ -x "${INSTALL_DIR}/scripts/ssl_issue.sh" ]; then
-        echo -e "  ${CYAN}Running SSL issuance script...${NC}"
-        if "${INSTALL_DIR}/scripts/ssl_issue.sh" "${SETUP_DOMAIN}" "${SETUP_EMAIL}"; then
-            SSL_ISSUED=true
-            echo -e "  ${GREEN}✓ SSL certificate obtained successfully!${NC}"
-        fi
-    elif [ -x "${INSTALL_DIR}/hyperdns" ]; then
-        echo -e "  ${CYAN}Issuing SSL via hyperdns CLI...${NC}"
-        if "${INSTALL_DIR}/hyperdns" -issue-ssl -domain "${SETUP_DOMAIN}" -email "${SETUP_EMAIL}" 2>/dev/null; then
-            SSL_ISSUED=true
-            echo -e "  ${GREEN}✓ SSL certificate obtained successfully!${NC}"
         fi
     fi
 fi
