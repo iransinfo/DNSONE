@@ -124,7 +124,7 @@ case "${ARCH}" in
         echo -e "${RED}[Error] Unsupported architecture: ${ARCH}${NC}"
         exit 1
         ;;
-es:
+esac
 echo -e "  ${GREEN}✓ Architecture detected: ${ARCH} (${BIN_ARCH})${NC}"
 
 HYPERDNS_REF="${HYPERDNS_REF:-main}"
