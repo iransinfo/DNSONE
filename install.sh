@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# DNSONE — 100% Offline Standalone Installer
-# Works with ZERO internet connection using pre-packaged binary & assets.
+# DNSONE — Standalone Installer (Interactive SSL & Domain Setup)
+# Works online & offline.
 # Supported OS: Ubuntu 20.04+, Debian 11+, CentOS/RHEL/Alma/Rocky 8+
 # ==============================================================================
 
@@ -36,59 +36,6 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="/opt/hyperdns"
 
-SPINNER_PID=""
-SPINNER_MSG=""
-SPINNER_LAST_LEN=0
-_spin_frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-_spin_idx=0
-_spinner_tick() {
-    while [ "${SPINNER_ALIVE:-0}" = "1" ]; do
-        _spin_idx=$(( (_spin_idx + 1) % ${#_spin_frames[@]} ))
-        local line="${_spin_frames[$_spin_idx]}  ${SPINNER_MSG}"
-        printf '\r\033[0;36m%s\033[0m' "$line"
-        local pad=$(( SPINNER_LAST_LEN - ${#line} ))
-        [ "$pad" -gt 0 ] && printf '%*s' "$pad" ''
-        SPINNER_LAST_LEN=${#line}
-        sleep 0.25
-    done
-}
-spinner_start() {
-    if [ ! -t 1 ]; then
-        if [ -n "$1" ]; then
-            echo -e "  ${CYAN}$1...${NC}"
-            SPINNER_LAST_MSG="$1"
-        fi
-        return 0
-    fi
-    SPINNER_MSG="${1:-Working...}"
-    SPINNER_LAST_LEN=0
-    SPINNER_LAST_MSG="${1:-}"
-    SPINNER_ALIVE=1
-    _spinner_tick &
-    SPINNER_PID=$!
-    trap 'spinner_stop' EXIT
-}
-spinner_msg() {
-    if [ -z "$SPINNER_PID" ]; then
-        if [ -n "$1" ] && [ "$1" != "${SPINNER_LAST_MSG:-}" ]; then
-            echo -e "  ${CYAN}$1...${NC}"
-            SPINNER_LAST_MSG="$1"
-        fi
-        return 0
-    fi
-    SPINNER_MSG="${1:-$SPINNER_MSG}"
-}
-spinner_stop() {
-    SPINNER_ALIVE=0
-    if [ -n "$SPINNER_PID" ]; then
-        kill "$SPINNER_PID" 2>/dev/null || true
-        wait "$SPINNER_PID" 2>/dev/null || true
-        SPINNER_PID=""
-        printf '\r%*s\r' "$SPINNER_LAST_LEN" ''
-        SPINNER_LAST_LEN=0
-    fi
-}
-
 PUBLIC_IP=""
 for _ip_ep in https://api.ipify.org https://ifconfig.me/ip https://icanhazip.com https://checkip.amazonaws.com; do
     _ip_val=$(curl -fsS --connect-timeout 3 --max-time 5 "${_ip_ep}" 2>/dev/null | tr -d '[:space:]')
@@ -111,6 +58,13 @@ validate_domain() {
     case "$1" in
         *.*) return 0 ;;
         *)   return 1 ;;
+    esac
+}
+
+validate_email() {
+    case "$1" in
+        *@*.*) return 0 ;;
+        *) return 1 ;;
     esac
 }
 
@@ -138,10 +92,11 @@ if curl -fL --retry 3 --connect-timeout 10 "${RELEASE_BASE}/hyperdns" -o "${DL_B
     SRC_BIN="${DL_BIN}"
     echo -e "  ${GREEN}✓ Downloaded release binary (${BIN_ARCH}): $(( $(stat -c%s "${DL_BIN}" 2>/dev/null || echo 0) / 1024 / 1024 )) MB${NC}"
 else
-    echo -e "${YELLOW}[Notice] Release binary not found at GitHub Releases tag. Trying direct build/raw assets or checking fallback...${NC}"
-    # Fallback or exit if binary is mandatory
+    echo -e "${YELLOW}[Notice] Release binary not found at GitHub Releases tag. Trying local fallback...${NC}"
     if [ -f "${SCRIPT_DIR}/../hyperdns" ]; then
         SRC_BIN="${SCRIPT_DIR}/../hyperdns"
+    elif [ -f "/opt/hyperdns/hyperdns" ]; then
+        SRC_BIN="/opt/hyperdns/hyperdns"
     else
         echo -e "${RED}[Error] Could not download the DNSONE binary from GitHub Releases.${NC}"
         exit 1
@@ -153,6 +108,9 @@ curl -fsL --retry 3 "${RAW_BASE}/config.example.json" -o "${ONLINE_CONFIG_EXAMPL
 
 ONLINE_RESTORE="$(mktemp /tmp/hyperdns-restore.XXXXXX)"
 curl -fsL --retry 3 "${RAW_BASE}/scripts/restore.sh" -o "${ONLINE_RESTORE}" || true
+
+ONLINE_SSL_ISSUE="$(mktemp /tmp/hyperdns-ssl.XXXXXX)"
+curl -fsL --retry 3 "${RAW_BASE}/scripts/ssl_issue.sh" -o "${ONLINE_SSL_ISSUE}" || true
 
 ONLINE_VERSION_JSON="$(mktemp /tmp/hyperdns-ver.XXXXXX)"
 curl -fsL --retry 3 "${RAW_BASE}/version.json" -o "${ONLINE_VERSION_JSON}" 2>/dev/null || true
@@ -194,6 +152,13 @@ if [ -f "${ONLINE_RESTORE}" ] && [ -s "${ONLINE_RESTORE}" ]; then
 fi
 rm -f "${ONLINE_RESTORE}"
 
+if [ -f "${ONLINE_SSL_ISSUE}" ] && [ -s "${ONLINE_SSL_ISSUE}" ]; then
+    install -o root -g root -m 0755 "${ONLINE_SSL_ISSUE}" "${INSTALL_DIR}/scripts/ssl_issue.sh"
+elif [ -f "${SCRIPT_DIR}/ssl_issue.sh" ]; then
+    install -o root -g root -m 0755 "${SCRIPT_DIR}/ssl_issue.sh" "${INSTALL_DIR}/scripts/ssl_issue.sh"
+fi
+rm -f "${ONLINE_SSL_ISSUE}"
+
 if [ -f "${ONLINE_VERSION_JSON}" ] && [ -s "${ONLINE_VERSION_JSON}" ]; then
     cp -f "${ONLINE_VERSION_JSON}" "${INSTALL_DIR}/version.json"
 fi
@@ -205,15 +170,15 @@ elif [ -f "${SCRIPT_DIR}/../config.example.json" ]; then
     FRESH_CONFIG_SOURCE="${SCRIPT_DIR}/../config.example.json"
 fi
 
+GENERATED_ADMIN_PASSWORD="$(openssl rand -hex 6 2>/dev/null || head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 12)"
+PANEL_PORT="$(shuf -i 20000-60000 -n 1 2>/dev/null || awk 'BEGIN{srand();print int(20000+rand()*40000)}')"
+
 if [ -n "${FRESH_CONFIG_SOURCE}" ]; then
     cp -f "${FRESH_CONFIG_SOURCE}" "${INSTALL_DIR}/config.json"
-    GENERATED_ADMIN_PASSWORD="admin_$(openssl rand -hex 4 2>/dev/null || echo 'secure123')"
-    GENERATED_API_KEY="key_$(openssl rand -hex 8 2>/dev/null || echo 'apikey123456')"
+    GENERATED_API_KEY="$(openssl rand -hex 16 2>/dev/null || head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)"
     
     sed -i "s|\"admin_password\": \"[^\"]*\"|\"admin_password\": \"${GENERATED_ADMIN_PASSWORD}\"|" "${INSTALL_DIR}/config.json"
     sed -i "s|\"api_key\": \"[^\"]*\"|\"api_key\": \"${GENERATED_API_KEY}\"|" "${INSTALL_DIR}/config.json"
-
-    PANEL_PORT="$(shuf -i 20000-60000 -n 1 2>/dev/null || awk 'BEGIN{srand();print int(20000+rand()*40000)}')"
     sed -i "s|\"web_port\": [0-9]*|\"web_port\": ${PANEL_PORT}|" "${INSTALL_DIR}/config.json"
 fi
 
@@ -284,9 +249,9 @@ elif command -v firewall-cmd >/dev/null 2>&1; then
 fi
 
 # ==============================================================================
-# STEP 4: SYSTEMD SERVICE SETUP & START
+# STEP 4: SYSTEMD SERVICE SETUP
 # ==============================================================================
-echo -e "${CYAN}${BOLD}[4/6] Creating & Starting Systemd Service...${NC}"
+echo -e "${CYAN}${BOLD}[4/6] Creating Systemd Service...${NC}"
 cat << 'EOF' > /etc/systemd/system/hyperdns.service
 [Unit]
 Description=DNSONE — Standalone SmartDNS & Gaming Gateway
@@ -319,13 +284,89 @@ EOF
 
 chmod 644 /etc/systemd/system/hyperdns.service
 systemctl daemon-reload
+echo -e "  ${GREEN}✓ Systemd service configured.${NC}"
+
+# ==============================================================================
+# STEP 5: DOMAIN & SSL CONFIGURATION
+# ==============================================================================
+echo ""
+echo -e "${CYAN}${BOLD}[5/6] Domain & SSL Certificate Setup...${NC}"
+
+SETUP_DOMAIN=""
+SETUP_EMAIL=""
+
+# Check if terminal is interactive
+if [ -t 0 ]; then
+    read -rp "👉 Enter your Domain (e.g. dns.example.com) [Press Enter to skip]: " USER_DOMAIN
+    if [ -n "${USER_DOMAIN}" ]; then
+        if validate_domain "${USER_DOMAIN}"; then
+            SETUP_DOMAIN="${USER_DOMAIN}"
+            read -rp "👉 Enter your Email for Let's Encrypt SSL: " USER_EMAIL
+            if validate_email "${USER_EMAIL}"; then
+                SETUP_EMAIL="${USER_EMAIL}"
+            else
+                echo -e "  ${YELLOW}⚠ Invalid email format. SSL generation will be skipped.${NC}"
+            fi
+        else
+            echo -e "  ${YELLOW}⚠ Invalid domain format. Skipping SSL setup.${NC}"
+        fi
+    fi
+fi
+
+SSL_ISSUED=false
+if [ -n "${SETUP_DOMAIN}" ] && [ -n "${SETUP_EMAIL}" ]; then
+    echo -e "  ${CYAN}Applying domain and email to /opt/hyperdns/config.json...${NC}"
+    sed -i "s|\"domain\": \"[^\"]*\"|\"domain\": \"${SETUP_DOMAIN}\"|" "${INSTALL_DIR}/config.json"
+    sed -i "s|\"email\": \"[^\"]*\"|\"email\": \"${SETUP_EMAIL}\"|" "${INSTALL_DIR}/config.json"
+    sed -i "s|\"acme_email\": \"[^\"]*\"|\"acme_email\": \"${SETUP_EMAIL}\"|" "${INSTALL_DIR}/config.json"
+    sed -i "s|\"ssl_enabled\": false|\"ssl_enabled\": true|" "${INSTALL_DIR}/config.json"
+
+    # Issue SSL
+    if [ -x "${INSTALL_DIR}/scripts/ssl_issue.sh" ]; then
+        echo -e "  ${CYAN}Running SSL issuance script...${NC}"
+        if "${INSTALL_DIR}/scripts/ssl_issue.sh" "${SETUP_DOMAIN}" "${SETUP_EMAIL}"; then
+            SSL_ISSUED=true
+            echo -e "  ${GREEN}✓ SSL certificate obtained successfully!${NC}"
+        fi
+    elif [ -x "${INSTALL_DIR}/hyperdns" ]; then
+        echo -e "  ${CYAN}Issuing SSL via hyperdns CLI...${NC}"
+        if "${INSTALL_DIR}/hyperdns" -issue-ssl -domain "${SETUP_DOMAIN}" -email "${SETUP_EMAIL}" 2>/dev/null; then
+            SSL_ISSUED=true
+            echo -e "  ${GREEN}✓ SSL certificate obtained successfully!${NC}"
+        fi
+    fi
+fi
+
+# ==============================================================================
+# STEP 6: START & VERIFY SERVICE
+# ==============================================================================
+echo ""
+echo -e "${CYAN}${BOLD}[6/6] Starting DNSONE Service...${NC}"
 systemctl enable hyperdns >/dev/null 2>&1
 systemctl restart hyperdns
 
+sleep 2
+if systemctl is-active --quiet hyperdns; then
+    echo -e "  ${GREEN}✓ DNSONE Service is active and running!${NC}"
+else
+    echo -e "  ${RED}✗ Warning: Service failed to start. Check: journalctl -u hyperdns -n 50${NC}"
+fi
+
+# Summary Banner
+echo ""
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════════════════════════${NC}"
 echo -e "${GREEN}${BOLD}       🎉 DNSONE INSTALLATION COMPLETED SUCCESSFULLY!                ${NC}"
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════════════════════════${NC}"
 echo -e "  ${BOLD}👤 Default Username:${NC}       ${YELLOW}admin${NC}"
 echo -e "  ${BOLD}🔑 Generated Password:${NC}     ${YELLOW}${GENERATED_ADMIN_PASSWORD}${NC}"
 echo -e "  ${BOLD}📂 Config Location:${NC}        ${YELLOW}/opt/hyperdns/config.json${NC}"
+
+if [ -n "${SETUP_DOMAIN}" ]; then
+    echo -e "  ${BOLD}🌐 Admin Dashboard:${NC}        ${CYAN}https://${SETUP_DOMAIN}:${PANEL_PORT}/admin${NC}"
+    echo -e "  ${BOLD}🔗 Subscription URL:${NC}       ${CYAN}https://${SETUP_DOMAIN}:${PANEL_PORT}/sub${NC}"
+    echo -e "  ${BOLD}🛡️  DoT / DoH Host:${NC}          ${CYAN}${SETUP_DOMAIN}${NC}"
+else
+    echo -e "  ${BOLD}🌐 Admin Dashboard:${NC}        ${CYAN}http://${PUBLIC_IP}:${PANEL_PORT}/admin${NC}"
+    echo -e "  ${BOLD}🔗 Subscription URL:${NC}       ${CYAN}http://${PUBLIC_IP}:${PANEL_PORT}/sub${NC}"
+fi
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════════════════════════${NC}"
