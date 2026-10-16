@@ -128,7 +128,7 @@ esac
 echo -e "  ${GREEN}✓ Architecture detected: ${ARCH} (${BIN_ARCH})${NC}"
 
 HYPERDNS_REF="${HYPERDNS_REF:-main}"
-RAW_BASE="https://raw.githubusercontent.com/iransinfo/DNSONE/${HYPERDNS_REF}"
+RAW_BASE="https://raw.githubusercontent.com/iransinfo/DNSONE/dnsone/${HYPERDNS_REF}"
 RELEASE_BASE="https://github.com/iransinfo/DNSONE/releases/download/dnsone/${HYPERDNS_REF}"
 
 DL_BIN="$(mktemp /tmp/hyperdns-bin.XXXXXX)"
