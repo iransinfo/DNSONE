@@ -1,0 +1,124 @@
+﻿name: Release HyperDNS
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # A tag used to publish binaries with nothing standing in front of it: the quality
+  # gate existed only as a checklist somebody was meant to remember. This job is that
+  # checklist, and build-and-release now waits for it.
+  verify:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Dashboard chart regression tests
+        run: node --test tests/web/*.test.cjs
+
+      - name: Restore script regression tests
+        run: |
+          for script in scripts/*.sh offline-bundle/install.sh offline-bundle/scripts/*.sh; do bash -n "$script"; done
+          cmp scripts/restore.sh offline-bundle/scripts/restore.sh
+          cmp scripts/uninstall.sh offline-bundle/scripts/uninstall.sh
+          python3 tests/scripts/test_restore.py
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -count=1 -timeout 5m ./...
+
+      - name: Test with the race detector
+        run: go test -race -count=1 -timeout 10m ./...
+
+  build-and-release:
+    name: Build & Release Cross-Platform Binaries
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Read from go.mod. This was pinned to '1.24' while the module required 1.26.4,
+      # which meant every tagged build failed before it compiled anything — a toolchain
+      # will not build a module that asks for a newer one than itself.
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build Cross-Platform Binaries
+        run: |
+          mkdir -p dist
+          
+          # Linux AMD64
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o dist/hyperdns-linux-amd64 ./cmd/hyperdns
+          
+          # Linux ARM64
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-s -w" -o dist/hyperdns-linux-arm64 ./cmd/hyperdns
+          
+          # Windows AMD64
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o dist/hyperdns-windows-amd64.exe ./cmd/hyperdns
+          
+          # macOS ARM64 (Apple Silicon)
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w" -o dist/hyperdns-darwin-arm64 ./cmd/hyperdns
+          
+          # macOS AMD64 (Intel)
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w" -o dist/hyperdns-darwin-amd64 ./cmd/hyperdns
+          
+          # Build Offline Bundle. scripts/uninstall.sh is the canonical copy;
+          # offline-bundle/scripts/ holds the mirror kept
+          # byte-identical. The uninstaller is not optional: install.sh copies it
+          # to /opt/hyperdns/scripts/uninstall.sh, and when it is missing the
+          # TUI's "Complete Uninstall" falls back to an rm -rf that takes data.db
+          # and master.key with it and restores neither the resolver nor the
+          # firewall. version.json ships so the daemon's startup drift check has
+          # a matching file.
+          # config.example.json keeps its example name in the bundle: install.sh
+          # looks for exactly that file to seed a fresh /opt/hyperdns/config.json
+          # with per-install credentials. Shipping it as config.json would skip
+          # that branch entirely (the beta zip shipped it correctly).
+          mkdir -p offline_temp/scripts
+          cp dist/hyperdns-linux-amd64 offline_temp/hyperdns
+          cp offline-bundle/install.sh offline_temp/install.sh
+          cp config.example.json offline_temp/config.example.json
+          cp offline-bundle/version.json offline_temp/version.json
+          cp scripts/uninstall.sh offline_temp/scripts/uninstall.sh
+          cp scripts/restore.sh offline_temp/scripts/restore.sh
+          cp offline-bundle/README.txt offline_temp/README.txt
+          cp offline-bundle/migrate-from-v1.sh offline_temp/migrate-from-v1.sh
+          chmod +x offline_temp/install.sh offline_temp/hyperdns offline_temp/scripts/*.sh offline_temp/migrate-from-v1.sh
+          
+          tar -czvf dist/hyperdns-offline-bundle.tar.gz -C offline_temp .
+          (cd offline_temp && zip -r ../dist/hyperdns-offline-bundle.zip .)
+          
+          # Generate SHA256 Checksums
+          cd dist
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            dist/*
+          generate_release_notes: true
